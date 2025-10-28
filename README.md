@@ -1,4 +1,9 @@
 # 🚀 Protheus Monitor Manager (Multi-Agent)
+![GitHub repo size](https://img.shields.io/github/repo-size/LeonardoMarconi/Protheus_Monitor_Manager?style=for-the-badge)
+![GitHub language count](https://img.shields.io/github/languages/count/LeonardoMarconi/Protheus_Monitor_Manager?style=for-the-badge)
+![GitHub forks](https://img.shields.io/github/forks/LeonardoMarconi/Protheus_Monitor_Manager?style=for-the-badge)
+![Bitbucket open issues](https://img.shields.io/bitbucket/issues/LeonardoMarconi/Protheus_Monitor_Manager?style=for-the-badge)
+![Bitbucket open pull requests](https://img.shields.io/bitbucket/pr-raw/LeonardoMarconi/Protheus_Monitor_Manager?style=for-the-badge)
 
 Este projeto consiste em um sistema de monitoramento para ambientes TOTVS Protheus, composto por duas partes principais: um **Agente Node.js** (backend) que roda no servidor e uma **Extensão Chrome** (frontend) que atua como interface de controle.
 
