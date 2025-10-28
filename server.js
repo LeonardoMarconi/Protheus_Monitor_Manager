@@ -201,9 +201,9 @@ wss.on('connection', (ws, params) => {
     return;
   }
 
-  // Envia as últimas 400 linhas iniciais
+  // Envia as últimas 100 linhas iniciais
   try {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).slice(-400);
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).slice(-100);
     lines.forEach(line => line && ws.send(JSON.stringify({ line })));
   } catch (e) {
     ws.send(JSON.stringify({ error: 'Erro ao ler log inicial: ' + e.message }));
