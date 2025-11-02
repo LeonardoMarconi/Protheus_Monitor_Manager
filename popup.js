@@ -1,12 +1,17 @@
 // Constantes e Elementos do DOM
 const logsEl = document.getElementById('logs');
 const agentList = document.getElementById('agentList');
+const portsList = document.getElementById('portsList');
 const toggleTheme = document.getElementById('toggleTheme');
+const container = document.getElementById('errorsContainer');
+const lastUpdate = document.getElementById('lastUpdate');
+const btnRefresh = document.getElementById('btnRefresh');
 
 // Variável global (ou de escopo do módulo) para armazenar as contagens do log atual
 let logCounters = { ERROR: 0, WARN: 0, INFO: 0, TOTAL: 0 };
 const MAX_LINES = 2000;
 let allLines = []; // Buffer para todas as linhas recebidas
+let activeWebSocket = null; // referência global ao WS atual
 
 document.getElementById('btnOpenWindow').onclick = () => {
   chrome.windows.create({
@@ -208,7 +213,7 @@ async function controlService(agent, svc, act) {
       method: 'POST',
       headers: { 'x-api-key': agent.key },
     });
-    // const data = await resp.json(); // Desnecessário, pois o wait fará o cheque final
+    
     if (!resp.ok) throw new Error(`Status ${resp.status}`);
 
     showAlert(`Comando ${actionLabel} enviado para ${svc}...`, 'info');
@@ -234,7 +239,7 @@ async function controlService(agent, svc, act) {
 }
 
 // Aguarda até que o status do serviço mude (ou tempo limite)
-async function waitForServiceStatus(agent, svc, act, timeoutMs = 25000) {
+async function waitForServiceStatus(agent, svc, act, timeoutMs = 60000) {
   const expected = act === 'start' || act === 'restart' ? 'Running' : 'Stopped';
   const startTime = Date.now();
 
@@ -252,7 +257,7 @@ async function waitForServiceStatus(agent, svc, act, timeoutMs = 25000) {
     } catch (e) {
       console.warn('Polling error:', e.message);
     }
-    await new Promise(r => setTimeout(r, 500)); // espera 2s entre as verificações
+    await new Promise(r => setTimeout(r, 2000)); // espera 2s entre as verificações
   }
 
   throw new Error(`Tempo limite: serviço ${svc} não mudou de status para ${expected} em ${timeoutMs / 1000}s`);
@@ -433,7 +438,12 @@ async function openLog(agent, svc) {
     const fullUrl = `${wsUrl}/logs?key=${agent.key}&service=${encodeURIComponent(svc)}&file=${encodeURIComponent(f)}`;
 
     function connectWebSocket(retryCount = 0) {
+      if (activeWebSocket) {
+        try { activeWebSocket.close(); } catch {}
+      }
+
       const ws = new WebSocket(fullUrl);
+      activeWebSocket = ws; // salva referência global
 
       ws.addEventListener('open', () => appendLine(`[Conectado ao serviço ${svc}]`));
       ws.addEventListener('message', e => {
@@ -444,11 +454,11 @@ async function openLog(agent, svc) {
 
       ws.addEventListener('close', () => {
         appendLine(`[Conexão encerrada]`);
-        if (retryCount < 5) {
+        if (retryCount < 5 && ws === activeWebSocket) {
           const delay = 3000 * (retryCount + 1);
           appendLine(`[Tentando reconectar em ${delay / 1000}s...]`);
           setTimeout(() => connectWebSocket(retryCount + 1), delay);
-        } else {
+        } else if (retryCount >= 5) {
           appendLine(`[Falha ao reconectar após várias tentativas.]`);
         }
       });
@@ -458,13 +468,16 @@ async function openLog(agent, svc) {
         ws.close();
       });
 
-      // Fecha o WS e oculta a barra de controle quando o modal é fechado
       const modalElement = document.getElementById('logModal');
       modalElement.addEventListener('hidden.bs.modal', () => {
-        ws.close();
-        if (controlBar) controlBar.style.display = 'none'; // Oculta a barra ao fechar
+        if (ws === activeWebSocket) {
+          ws.close();
+          activeWebSocket = null;
+        }
+        if (controlBar) controlBar.style.display = 'none';
       }, { once: true });
     }
+
 
     connectWebSocket();
   } catch (e) {
@@ -473,7 +486,13 @@ async function openLog(agent, svc) {
 }
 
 async function openIni(agent, svc) {
+  
   try {
+    // Fecha qualquer WS ativo de log
+    if (activeWebSocket) {
+      try { activeWebSocket.close(); } catch {}
+      activeWebSocket = null;
+    }
     // Esconde a barra de controle de Log ao exibir o INI
     const controlBar = document.getElementById('logControlBar');
     if (controlBar) controlBar.style.display = 'none'; 
@@ -513,10 +532,10 @@ async function openIni(agent, svc) {
     const data = await iniResp.json();
 
     // Mostra o INI no mesmo modal do log
-    const logsEl = document.getElementById('logs');
+    const logsEl = document.getElementById('inis');
     logsEl.textContent = data.content;
-    const logModal = new bootstrap.Modal(document.getElementById('logModal'));
-    document.getElementById('logModalLabel').textContent = `Configuração INI - ${svc}`;
+    const logModal = new bootstrap.Modal(document.getElementById('IniModal'));
+    document.getElementById('IniModalLabel').textContent = `Configuração INI - ${svc}`;
     logModal.show();
 
   } catch (e) {
@@ -644,12 +663,345 @@ async function renderWebApps() {
   }
 }
 
+// ===========================================================
+// 📊 Atualiza contadores de cada aba
+// ===========================================================
+async function updateCounts() {
+  const agents = await getAgents();
+  if (!agents.length) {
+    container.innerHTML = '<div class="alert alert-warning">Nenhum agente configurado.</div>';
+    return;
+  }
+
+  const agent = agents[0];
+  try {
+    const resp = await fetch(`${agent.url}/api/counts`, {
+      headers: { 'x-api-key': agent.key },
+    });
+    const data = await resp.json();
+    document.getElementById('countWebApps').textContent = data.webapps || 0;
+    document.getElementById('countErrors').textContent = data.errors || 0;
+
+    let agents = [];
+    if (typeof getAgents === 'function') {
+      agents = await getAgents();
+    } else {
+      const s = await chrome.storage.local.get('agents');
+      agents = s.agents || [];
+    }
+    document.getElementById('countServers').textContent = (agents && agents.length) || 0;
+  } catch (e) {
+    console.warn('Falha ao atualizar contadores:', e.message);
+  }
+}
+
+function applyErrorFilter() {
+  const container = document.getElementById('errorsContainer');
+  const filter = (document.getElementById('errorFilter').value || '').trim().toLowerCase();
+  const dateFilterValue = document.getElementById('dateFilter')?.value || '';
+
+  const list = window.allErrors || [];
+  const filtered = list.filter(err => {
+    // --- Filtro de texto ---
+    const user = (err.user || '').toString().toLowerCase();
+    const fonte = (err.fonte || '').toString().toLowerCase();
+    const service = (err.service || '').toString().toLowerCase();
+    const routine = (err.routine || '').toString().toLowerCase();
+    const errorText = (err.errorText || '').toString().toLowerCase();
+    const textMatch = !filter ||
+      user.includes(filter) ||
+      fonte.includes(filter) ||
+      service.includes(filter) ||
+      routine.includes(filter) ||
+      errorText.includes(filter);
+
+    // --- Filtro por data ---
+    if (!dateFilterValue) return textMatch; // sem filtro de data
+    const logDate = new Date(err.timestamp);
+    if (isNaN(logDate)) return false;
+    const logDateStr = logDate.toISOString().split('T')[0]; // formato yyyy-mm-dd
+    return textMatch && logDateStr === dateFilterValue;  
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = '<div class="alert alert-warning">Nenhum resultado encontrado.</div>';
+    document.getElementById('countErrors').textContent = (filtered.length);
+    return;
+  }
+
+  container.innerHTML = '';
+  filtered.slice().reverse().forEach(err => {
+    const card = document.createElement('div');
+    card.className = 'card error-card shadow-sm';
+
+    const dataLocal = err.logDateTime || err.timestamp || err.errorDate || '';
+    const displayDate = dataLocal ? (new Date(err.timestamp).toLocaleString('pt-BR')) : 'Sem data';
+
+    const isCustom = err.errorText?.includes?.('U_');
+    //const isCustom = err.errorText?.startsWith?.('U_');
+    const actionBtn = isCustom
+      ? `<button class="btn btn-sm btn-warning mt-2"><i class="bi bi-envelope"></i> Abrir chamado</button>`
+      : `<a class="btn btn-sm btn-success mt-2" target="_blank" rel="noopener noreferrer" href="https://www.google.com/search?q=TOTVS+Protheus+${encodeURIComponent(err.fonte || '')}+${encodeURIComponent(err.errorText || '')}">
+           <i class="bi bi-search"></i> Pesquisar solução
+         </a>         
+         `;
+    const colorBadge = isCustom ? `warning"> Customizado` : `info"> Padrão`;
+    card.innerHTML = `
+      <div class="card-body col">
+        <h6 class="card-title text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> ${escapeHtml(err.errorText || '')}</h6>
+        <p class="mb-1"><strong>Usuário:</strong> ${escapeHtml(err.user || '—')}</p>
+        <p class="mb-1"><strong>Rotina:</strong> ${escapeHtml(err.routine || '—')} ${err.routineDesc ? '- ' + escapeHtml(err.routineDesc) : ''}</p>
+        <p class="mb-1"><strong>Fonte:</strong> ${escapeHtml(err.fonte || '—')} <span class="mb-2 badge text-bg-${colorBadge}</span></p>
+        <p class="mb-1"><strong>Serviço:</strong> ${escapeHtml(err.service || '—')}</p>
+        <p class="mb-1"><strong>Agente:</strong> ${escapeHtml(err.agent || '—')}</p>
+        <p class="text-muted small mb-1">Detectado em: ${escapeHtml(displayDate || '')}</p>
+        ${actionBtn}
+      </div>
+    `;
+
+    container.appendChild(card);
+  });
+
+  document.getElementById('countErrors').textContent = filtered.length;
+}
+
+// função utilitária simples para escapar HTML (evita injeção na render)
+function escapeHtml(unsafe) {
+  return (unsafe+'').replace(/[&<>"'`]/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;', '`':'&#96;'
+  })[c]);
+}
+
+// -------------------------
+// loadErrors()
+// -------------------------
+async function loadErrors() {
+  const container = document.getElementById('errorsContainer');
+  container.innerHTML = '<div class="alert alert-info">Carregando erros...</div>';
+
+  const agents = await getAgents();
+  if (!agents.length) {
+    container.innerHTML = '<div class="alert alert-warning">Nenhum agente configurado.</div>';
+    document.getElementById('countErrors').textContent = 0;
+    return;
+  }
+
+  // sua lógica: usa o primeiro agente configurado para buscar /api/errors
+  const agent = agents[0];
+
+  try {
+    const res = await fetch(`${agent.url}/api/errors`, {
+      headers: { 'x-api-key': agent.key },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    if (!Array.isArray(data) || data.length === 0) {
+      container.innerHTML = '<div class="alert alert-warning">Nenhum erro registrado até o momento.</div>';
+      window.allErrors = [];
+      document.getElementById('countErrors').textContent = 0;
+      document.getElementById('lastUpdate').textContent = `Última atualização: ` + new Date().toLocaleTimeString('pt-BR');
+      return;
+    }
+
+    // guarda a lista completa globalmente para filtros subsequentes
+    window.allErrors = data;
+
+    // aplica filtro atual (se houver) e renderiza
+    applyErrorFilter();
+
+    // atualiza lastUpdate e counts
+    document.getElementById('lastUpdate').textContent = `Última atualização: ` + new Date().toLocaleTimeString('pt-BR');
+    document.getElementById('countErrors').textContent = data.length;
+
+  } catch (e) {
+    container.innerHTML = `<div class="alert alert-danger">Erro ao carregar erros: ${escapeHtml(e.message)}</div>`;
+    window.allErrors = [];
+    document.getElementById('countErrors').textContent = 0;
+  }
+}
+
+async function renderPorts() {
+  const agents = await getAgents();
+  portsList.innerHTML = '';
+
+  if (!agents.length) {
+    portsList.innerHTML = '<div class="alert alert-warning">Nenhum agente configurado.</div>';
+    return;
+  }
+
+  for (let i = 0; i < agents.length; i++) {
+    const ag = agents[i];
+    const c = document.createElement('div');
+    c.className = 'card mb-2';
+    c.innerHTML = `
+      <div class="card-body w-100 mx-auto p-10">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <h5 id="titulo"><i class="bi bi-hdd-rack"></i> ${ag.name} - (${ag.url})</h5>
+        </div>
+        <div id="svcp${i}">
+        <span class="spinner-border spinner-border-sm"></span><br>
+        Scaneando portas para este servidor... Esse processo pode demorar... Aguarde...</div>
+      </div>
+    `;
+
+    portsList.appendChild(c);
+    fetchPorts(ag, i);
+  }
+}
+
+async function fetchPorts(ag, i) {
+  const el = document.getElementById(`svcp${i}`);
+  
+  // NOVO: Definir um ID único para a tabela
+  const tableId = `ports-table-${i}`;
+
+  try {
+    const r = await fetch(`${ag.url}/api/ports`, {
+      headers: { 'x-api-key': ag.key },
+    });
+
+    if (!r.ok) throw new Error(await r.text());
+    const list = await r.json();
+
+    // NOVO: Destruir a instância anterior do DataTables, se existir
+    // Isso é crucial se você for recarregar os dados sem recarregar a página
+    if ($.fn.DataTable.isDataTable(`#${tableId}`)) {
+      $(`#${tableId}`).DataTable().destroy();
+    }
+
+    el.innerHTML = ''; // Limpa o conteúdo anterior
+
+    if (!list.length) {
+      el.innerHTML = '<div class="text-muted">Nenhuma porta de serviço encontrada neste server.</div>';
+      return;
+    }
+
+    const tableRows = list.map(s => {
+      const { Servico: n, Processo: p, Display: dn, PID: pid, Porta_TCP: tcp } = s;
+      return `
+        <tr>
+          <td>
+            <strong>${dn}</strong><br>
+            <small class="text-muted">${n}</small>
+          </td>
+          <td>${pid}</td>
+          <td>${p}</td>
+          <td><strong>${tcp}</strong></td>
+          <td><small class="text-muted">${ag.url}</small></td>
+        </tr>
+      `;
+    }).join('');
+
+    // Adicionamos o ID único que definimos
+    const tableHTML = `
+      <div class="table-responsive-sm">
+        <table id="${tableId}" class="table table-striped table-hover table-sm align-middle" style="width:100%">
+          <caption class="caption-top">
+            ${list.length} porta(s) de serviço encontrada(s)
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Display Name / Serviço</th>
+              <th scope="col">PID</th>
+              <th scope="col">Processo</th>
+              <th scope="col">Porta TCP</th>
+              <th scope="col">Agente</th>
+            </tr>
+          </thead>
+          <tbody id="bodytable">
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    el.innerHTML = tableHTML;
+
+    // NOVO: Inicializar o DataTables na tabela que acabamos de criar
+    // Isso "ativa" a busca, ordenação e paginação
+    new DataTable(`#${tableId}`, {
+        // Opções de configuração (opcional)
+        layout: {
+            topStart: 'pageLength',
+            topEnd: 'search',
+            bottomStart: 'info', 
+            bottomEnd: 'paging'  
+        },
+        // Tradução para Português-Brasil (opcional, mas recomendado)
+        language: {
+          "sEmptyTable": "Nenhum registro encontrado",
+          "sInfo": "Mostrando de _START_ até _END_ de _TOTAL_ registros",
+          "sInfoEmpty": "Mostrando 0 até 0 de 0 registros",
+          "sInfoFiltered": "(Filtrados de _MAX_ registros)",
+          "sInfoPostFix": "",
+          "sInfoThousands": ".",
+          "sLengthMenu": "_MENU_ resultados por página",
+          "sLoadingRecords": "Carregando...",
+          "sProcessing": "Processando...",
+          "sZeroRecords": "Nenhum registro encontrado",
+          "sSearch": "Buscar:",
+          "oPaginate": {
+              "sNext": "Próximo",
+              "sPrevious": "Anterior",
+              "sFirst": "Primeiro",
+              "sLast": "Último"
+          },
+          "oAria": {
+              "sSortAscending": ": Ordenar colunas de forma ascendente",
+              "sSortDescending": ": Ordenar colunas de forma descendente"
+          },
+          "select": {
+              "rows": {
+                  "_": "Selecionado %d linhas",
+                  "0": "Nenhuma linha selecionada",
+                  "1": "Selecionado 1 linha"
+              }
+          }
+      }
+    });
+
+  } catch (e) {
+    el.innerHTML = `<div class="text-danger">Erro ao carregar portas: ${e.message}</div>`;
+  }
+}
+
+// -------------------------
+// inicialização: listeners e chamadas
+// -------------------------
+document.getElementById('errorFilter').addEventListener('input', () => applyErrorFilter());
+document.getElementById('dateFilter').addEventListener('input', () => applyErrorFilter());
+
+// ao abrir: atualiza contadores e carrega erros
+updateCounts();
+loadErrors();
+setInterval(() => {
+  updateCounts();
+  loadErrors();
+}, 5 * 60 * 1000);
+
+
+// Atualiza contadores a cada 5 minutos
+updateCounts();
+setInterval(() => {
+  updateCounts();
+  }, 5 * 60 * 1000);
+
+// Atualização manual e automática
+btnRefresh.onclick = loadErrors;
+setInterval(loadErrors, 5 * 60 * 1000);
+
+// Carrega ao abrir
+loadErrors();
+
 document.getElementById('btnRefreshAll').onclick = () => {
   renderWebApps();
   renderAgents();
+  renderPorts();
 };
 
 // Atualiza periodicamente e executa na inicialização
 setInterval(renderWebApps, 60000);
 renderWebApps();
 renderAgents();
+renderPorts();

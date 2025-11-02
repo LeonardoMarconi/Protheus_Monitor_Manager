@@ -39,13 +39,37 @@
       background-color: #1e1e1e;
       color: #ffffff;
     }
+
+    .theme-dark .table {
+      background-color: #1e1e1e;
+      color: #ffffff;
+    }
     
+    .theme-dark .form-control {
+      background-color: #1e1e1e;
+      color: #ffffff;
+    }
+
+    .theme-dark .card .error-card {
+      background-color: #1e1e1e;
+      color: #ffffff;
+    }
+
+    .theme-dark .table-striped {
+      background-color: #1e1e1e;
+      color: #ffffff;
+    }
+
     .theme-dark .card-header {
       background-color: #333 !important;
       border-color: #333;
     }
 
     .theme-dark .card .card-body .text-muted {
+      color: #aaaaaa !important;
+    }
+
+    .theme-dark .caption-top {
       color: #aaaaaa !important;
     }
     
@@ -62,6 +86,20 @@
     pre#logs {
       /* Estilos do console */
       height: 70vh !important;
+      overflow-y: auto !important;
+      background-color: #111 !important;
+      color: #bfb !important;
+      padding: 8px !important;
+      border-radius: 6px !important;
+      font-family: monospace !important;
+      margin-top: 10px !important;
+      white-space: pre-wrap; 
+      word-break: break-word;
+    }
+
+    pre#inis {
+      /* Estilos do console */
+      height: 80vh !important;
       overflow-y: auto !important;
       background-color: #111 !important;
       color: #bfb !important;
@@ -99,25 +137,98 @@
 
     <div id="alertArea"></div>
 
-    <div class="card mt-3">
-      <div class="card-header bg-secondary text-white">
-        <i class="bi bi-hdd-rack"></i> Servers
-        <button id="btnAddAgent" class="btn btn-sm btn-light float-end">+ Adicionar</button>
-      </div>
-      <div class="card-body">
-        <div id="agentList" class="mb-2">Carregando agentes...</div>
+   <!-- Nav Tabs -->
+  <ul class="nav nav-tabs mt-3" id="mainTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="servers-tab" data-bs-toggle="tab" data-bs-target="#servers" type="button" role="tab" aria-controls="servers" aria-selected="true">
+        <i class="bi bi-hdd-rack"></i> Servers (<span id="countServers">0</span>)
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="webapps-tab" data-bs-toggle="tab" data-bs-target="#webapps" type="button" role="tab" aria-controls="webapps" aria-selected="false">
+        <i class="bi bi-globe2"></i> WebApps (<span id="countWebApps">0</span>)
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="errors-tab" data-bs-toggle="tab" data-bs-target="#errors" type="button" role="tab" aria-controls="errors" aria-selected="false">
+        <i class="bi bi-bug-fill"></i> Errors (<span id="countErrors">0</span>)
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="ports-tab" data-bs-toggle="tab" data-bs-target="#ports" type="button" role="tab" aria-controls="ports" aria-selected="false">
+        <i class="bi bi-ethernet"></i> Portas TCP 
+      </button>
+    </li>
+  </ul>
+
+  <!-- Tab Contents -->
+  <div class="tab-content mt-3" id="mainTabsContent">
+
+    <!-- Aba Servers -->
+    <div class="tab-pane fade show active" id="servers" role="tabpanel" aria-labelledby="servers-tab">
+      <div class="card">
+        <div class="card-header bg-secondary text-white">
+          <i class="bi bi-hdd-rack"></i> Servers
+          <button id="btnAddAgent" class="btn btn-sm btn-light float-end">+ Adicionar</button>
+        </div>
+        <div class="card-body">
+          <div id="agentList" class="mb-2">Carregando agentes...</div>
+        </div>
       </div>
     </div>
 
-    <div class="card mt-3">
-      <div class="card-header bg-secondary text-white">
-        <i class="bi bi-globe2"></i> WebApps
-        <button id="btnAddWebApp" class="btn btn-sm btn-light float-end">+ Adicionar</button>
-      </div>
-      <div class="card-body" id="webappList">
-        <div class="text-muted">Carregando...</div>
+    <!-- Aba WebApps -->
+    <div class="tab-pane fade" id="webapps" role="tabpanel" aria-labelledby="webapps-tab">
+      <div class="card">
+        <div class="card-header bg-secondary text-white">
+          <i class="bi bi-globe2"></i> WebApps
+          <button id="btnAddWebApp" class="btn btn-sm btn-light float-end">+ Adicionar</button>
+        </div>
+        <div class="card-body" id="webappList">
+          <div class="text-muted">Carregando...</div>
+        </div>
       </div>
     </div>
+
+    <!-- Aba Errors -->
+    <div class="tab-pane fade" id="errors" role="tabpanel" aria-labelledby="errors-tab">
+      <div class="card">
+        <div class="card-header bg-danger text-white">
+          <i class="bi bi-bug-fill"></i> Monitor de Errors
+          <button id="btnRefresh" class="btn btn-sm btn-light float-end">
+            <i class="bi bi-arrow-clockwise"></i> Atualizar
+          </button>
+        </div>
+        <div class="card-body">
+          <div class="input-group mb-2">
+            <label class="form-control">Filtrar por usuário, serviço, fonte ou rotina... 
+              <input id="errorFilter" type="text" class="form-control" >
+            </label>
+            <label class="form-control ms-2">Filtrar por Data: 
+              <input id="dateFilter" type="date" class="form-control" title="Filtrar por data">
+            </label>
+            
+          </div>
+          <span id="lastUpdate" class="text-muted small mb-2 d-block">Última atualização: —</span>
+          <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4" id="errorsContainer">
+            <div class="alert alert-info">Carregando erros...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Aba Ports -->
+    <div class="tab-pane fade show" id="ports" role="tabpanel" aria-labelledby="ports-tab">
+      <div class="card">
+        <div class="card-header bg-secondary text-white">
+          <i class="bi bi-ethernet"></i> Monitor de Portas TCP 
+        </div>
+        <div class="card-body">
+          <div id="portsList" class="mb-2">Carregando...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 
     <footer><small>Desenvolvido por <a href="https://github.com/LeonardoMarconi" target="_blank">Leonardo Marconi</a></small></footer>
   </div>
@@ -137,8 +248,28 @@
           </pre>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
           <button id="btnClearLog" type="button" class="btn btn-outline-light">Limpar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+   <div class="modal fade" id="IniModal" tabindex="-1" aria-labelledby="IniModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-fullscreen">
+      <div class="modal-content bg-dark text-light">
+        <div class="modal-header">
+          <h5 class="modal-title" id="IniModalLabel"><i class="bi bi-file-code"></i> INI</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            </div>
+          <pre id="inis" class="p-2 rounded">
+[Conecte-se a um serviço para visualizar o INI]
+          </pre>
+        </div>
+        <div class="modal-footer">
+          
         </div>
       </div>
     </div>
@@ -155,6 +286,12 @@
     async function applySavedTheme() {
       const saved = await chrome.storage.local.get('theme');
       const theme = saved.theme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      
+      // Pega a tag <html>
+      let html = document.querySelector('html');
+      // Adiciona o atributo data-bs-theme
+      html.setAttribute('data-bs-theme', theme);
+      html.classList.add(theme);
       setTheme(theme);
     }
 
@@ -173,5 +310,7 @@
 
     applySavedTheme();
   </script>
+  <script src="js/jquery-3.7.1.min.js"></script>
+  <script src="js/datatables.min.js"></script>
 </body>
 </html>
