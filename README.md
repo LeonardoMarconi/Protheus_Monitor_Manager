@@ -42,7 +42,7 @@ O Agente deve ser instalado no servidor Windows onde os serviços Protheus estã
 #### Instalação
 1.  Crie uma pasta (ex: `protheus-agent`) no seu servidor.
 2.  Coloque os arquivos `server.js`, `inis.json`, `logs.json` (vazios ou os arquivos iniciais) e `webapps.json` na pasta.
-3.  Crie um arquivo `package.json` para gerenciar as dependências:
+3.  Coloque o arquivo `package.json` na mesma pasta, para gerenciar as dependências:
     ```json
     {
       "name": "protheus-monitor-agent",
@@ -84,31 +84,10 @@ O Agente deve ser instalado no servidor Windows onde os serviços Protheus estã
 
 #### Instalação
 1.  Crie uma pasta (ex: `protheus-extensao`).
-2.  Coloque os arquivos `popup.html`, `popup.js`, e inclua a pasta `js/` (com `bootstrap.bundle.min.js`) e a pasta `icons/` (com o ícone da extensão).
-3.  Crie o arquivo de manifesto (`manifest.json` - não fornecido, mas necessário):
-    ```json
-    {
-      "manifest_version": 3,
-      "name": "Protheus Monitor Manager",
-      "version": "1.0",
-      "description": "Gerenciamento e monitoramento de serviços e logs Protheus.",
-      "action": {
-        "default_popup": "popup.html",
-        "default_icon": "icons/48.png"
-      },
-      "permissions": [
-        "storage",
-        "windows"
-      ],
-      "host_permissions": [
-        "http://*/",
-        "https://*/"
-      ]
-    }
-    ```
-4.  Abra o Chrome e vá em `chrome://extensions/`.
-5.  Ative o **Modo Desenvolvedor** (canto superior direito).
-6.  Clique em **Carregar sem compactação** e selecione a pasta da extensão (`protheus-extensao`).
+2.  Coloque os arquivos `popup.html`, `popup.js`, `manifest.json` , e inclua a pasta `js/` (com `bootstrap.bundle.min.js`) e a pasta `icons/` (com o ícone da extensão).
+3.  Abra o Chrome e vá em `chrome://extensions/`.
+4.  Ative o **Modo Desenvolvedor** (canto superior direito).
+5.  Clique em **Carregar sem compactação** e selecione a pasta da extensão (`protheus-extensao`).
 
 #### Utilização
 1.  Clique no ícone da Extensão.
