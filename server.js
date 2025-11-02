@@ -140,6 +140,48 @@ app.post('/api/service/:name/:action', (req, res) => {
   });
 });
 
+/** GET /api/services: Lista serviços filtrados por TOTVS (default). */
+app.get('/api/ports', (req, res) => {
+  const filter = req.query.filter || 'TOTVS';
+  // Note: Usa PowerShell para listar e formatar em JSON
+  const psport = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    `Get-NetTCPConnection |
+            Where-Object { $_.State -eq "Listen" } |
+            Select-Object LocalAddress, LocalPort, OwningProcess |
+            ForEach-Object {
+                $CurrentPID = $_.OwningProcess;
+                $Process = Get-Process -Id $CurrentPID -ErrorAction SilentlyContinue;
+                $Service = Get-CimInstance -ClassName Win32_Service -Filter "ProcessId = $($CurrentPID)" -ErrorAction SilentlyContinue;
+
+                [PSCustomObject]@{
+                    Processo   = $Process.ProcessName;
+                    Servico    = if ($Service) {$Service.Name} else {"N/A"}; 
+		    Display    = if ($Service) {$Service.DisplayName} else {"N/A"}; 
+                    PID        = $CurrentPID;
+                    Porta_TCP  = $_.LocalPort;
+                    Endereco   = $_.LocalAddress;
+                }
+            } |
+            Where-Object { $_.Processo -match "TOTVS|licenseVirtual" -or $_.Servico -match "TOTVS|licenseVirtual" } |
+            ConvertTo-Json -Compress`,
+  ]);
+
+  let out = '';
+  psport.stdout.on('data', d => out += d.toString('utf8'));
+
+  psport.on('close', () => {
+    try {
+      const data = JSON.parse(out || '[]');
+      // Garante que o retorno é sempre um array
+      res.json(Array.isArray(data) ? data : [data]);
+    } catch {
+      res.json([]);
+    }
+  });
+});
+
 // --- Rotas de Log Path (Caminho) ---
 
 /** GET /api/logpath/:service: Retorna o caminho do log salvo para o serviço. */
@@ -438,210 +480,112 @@ function appendErrorLog(data) {
 
 /**
  * Extrai TODOS os blocos THREAD ERROR de um texto.
- * Retorna array de objetos { rawBlock, errorText, remarkText, parsed:{ user, module, routine, routineDesc } }
+ * Retorna array de objetos { rawBlock, errorText, remarkText, parsed:{ user, fonte, routine, routineDesc } }
  */
-/*function extractAllThreadErrorBlocks(content) {
-  // normaliza endings
-  // regex pega cada bloco que começa com THREAD ERROR e vai até duplo newline ou EOF
-  const regex = /(THREAD ERROR[\s\S]*?)(?=THREAD ERROR|\Z)/gi;
-  const blocks = [...content.matchAll(regex)].map(m => m[0]);
+function extractAllThreadErrorBlocks(content) {
+  if (!content || typeof content !== 'string') return [];
+
+  const lines = content.split(/\r?\n/);
+  const blocks = [];
+
+  // Monta blocos manualmente: cada linha que começa com "THREAD ERROR" inicia um bloco
+  let current = null;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*THREAD ERROR/i.test(ln)) {
+      // fecha bloco anterior
+      if (current) {
+        blocks.push(current.join('\n'));
+      }
+      // inicia novo bloco
+      current = [ln];
+    } else {
+      // se estivermos em um bloco atual, acumula a linha
+      if (current) current.push(ln);
+    }
+  }
+  // empurra último bloco
+  if (current) blocks.push(current.join('\n'));
 
   const results = [];
 
   for (const block of blocks) {
-    // busca a linha de erro principal: primeiro trecho "array ..." ou a primeira linha não-metadado
-    let errorText = null;
-    // tenta encontrar linhas significativas (não linhas que começam com '[' ou 'build:' etc)
-    const lines = block.split(/\r?\n/).map(l => l.trim()).filter(l => l.length);
-    for (let i = 0; i < lines.length; i++) {
-      const ln = lines[i];
-      // preferimos linhas que contenham 'array' (caso clássico), senão a primeira linha depois do header que não é [tag:]
-      if (/array\s+.+/i.test(ln)) { errorText = ln; break; }
-      // se linha contem 'on ' e '(' e '.PR' pode ser também
-      if (/\bon\s+[A-Z0-9_]+\(/i.test(ln) || /\.[Pp][Rr][WwXx]/.test(ln)) { errorText = ln; break; }
-      // ignora lines que são tags [build:, [platform:, [remark:, etc
-      if (!/^\[/.test(ln) && !/^\[thread:/i.test(ln) && !/^\[build:/i.test(ln)) {
-        // candidate: first non-bracket line that contains letters
-        if (!errorText) errorText = ln;
+    // normaliza e separa em linhas úteis
+    const rawLines = block.split(/\r?\n/).map(l => l.replace(/\r/g, ''));
+
+    // remove linhas completamente em branco mas mantém a ordem
+    const useful = rawLines.map(l => l.trim()).filter(l => l.length);
+
+    // Extrai errorText: procuramos a primeira linha "significativa" após o header
+    // Critérios: contém 'array', 'type mismatch', 'on <FUNC>(', ou extensão .PRW/.PRX/.TLPP
+    let errorText = '';
+    for (let i = 0; i < useful.length; i++) {
+      const s = useful[i];
+      if (/^\s*THREAD ERROR/i.test(s)) continue;
+      if (/(array\s+.+|type\s+mismatch|on\s+[A-Z0-9_]+\(|\.[Pp][Rr][WwXx])/i.test(s)) {
+        errorText = s;
+        break;
       }
+      // se ainda não encontrou, pegue a primeira linha não-bracket como fallback
+      if (!/^\[/.test(s) && !errorText) errorText = s;
     }
-    if (!errorText) errorText = lines.slice(0,3).join(' | ');
+    if (!errorText && useful.length) errorText = useful.slice(0, 3).join(' | ');
 
-    // remark extraction (se houver)
-    const remarkMatch = block.match(/\[remark:([\s\S]*?)\]/i);
-    const remarkText = remarkMatch ? remarkMatch[1].replace(/\s+/g, ' ').trim() : '';
+    // remark: procura por [remark: ...] em qualquer lugar do bloco (pode não estar na mesma linha)
+    // Captura até o primeiro ']' após [remark:
+    let remarkText = '';
+    const remarkRegex = /\[remark:([\s\S]*?)\]/i;
+    const rm = block.match(remarkRegex);
+    if (rm) remarkText = rm[1].replace(/\s+/g, ' ').trim();
 
-    // parse remark for user/fonte/obj robustly
+    // parsed fields defaults
     let user = 'Desconhecido', fonte = '', routine = 'N/A', routineDesc = '';
 
-     // Exemplo: "on CTB010ACOLS(CTBA010.PRW)" -> fonte = CTBA010
+    // tenta extrair fonte a partir do errorText (preferível) ou procurar no bloco
     const onMatch = errorText.match(/on\s+[A-Z0-9_]+\(([A-Z0-9_]+)\.(PRW|PRX|TLPP)\)/i);
     if (onMatch) {
       fonte = `${onMatch[1]}.${onMatch[2].toUpperCase()}`;
     } else {
-      // fallback: pega o primeiro (.PRW|.PRX|.TLPP) se não tiver "on"
-      const fallback = errorText.match(/\(([A-Z0-9_]+)\.(PRW|PRX|TLPP)\)/i);
-      if (fallback) fonte = `${fallback[1]}.${fallback[2].toUpperCase()}`;
+      // busca por qualquer ocorrência (.PRW/.PRX/.TLPP) no bloco
+      const fallback = block.match(/\(([A-Z0-9_]+)\.(PRW|PRX|TLPP)\)/i) || block.match(/([A-Z0-9_]+)\.(PRW|PRX|TLPP)/i);
+      if (fallback) fonte = `${fallback[1]}.${fallback[2] ? fallback[2].toUpperCase() : ''}`.replace(/\.$/, '');
     }
 
+    // se houver remarkText, extrai Logged e Obj com tolerância para espaçamentos
     if (remarkText) {
-      // normalize spacing
-      //const r = remarkText.replace(/\s+/g, ' ').trim();
-      const r = remarkText;
-
-      // user: look for 'Logged' (tolerante aos espaços em torno do :)
-      const u = r.match(/Logged\s*:\s*([A-Za-z0-9._\-@]+)/iu)  // allow some extra chars in username
-                 || r.match(/Logged\s*:\s*([^\s]+)/iu);
+      const u = remarkText.match(/Logged\s*:\s*([A-Za-z0-9._\-@]+)/i)
+             || remarkText.match(/Logged\s*:\s*([^\s]+)/i);
       if (u) user = u[1].trim();
 
-            // Obj: may be "Obj :CTBA010 - Calendário Contábil" or "Obj : CTBA010 - ...", tolerate spacing
-      const o = r.match(/Obj\s*:\s*([U_]*[A-Za-z0-9_\.]+)\s*(?:-|$)\s*([^\n\r]*)/iu)
-             || r.match(/Obj\s*:\s*([U_]*[A-Za-z0-9_\.]+)/iu);
+      const o = remarkText.match(/Obj\s*:\s*([U_]*[A-Za-z0-9_\.]+)\s*(?:-\s*([^\[\]]+))?/i);
       if (o) {
         routine = (o[1] || 'N/A').trim();
         routineDesc = (o[2] || '').trim();
+      } else {
+        // fallback: alguma vez obj pode estar sem "Obj :", tentar extrair algo que pareça rotina.PRW
+        const alt = remarkText.match(/([A-Z0-9_]+)\.(PRW|PRX|TLPP)/i);
+        if (alt) {
+          routine = alt[1];
+          routineDesc = '';
+        }
       }
-
-      // sometimes Obj appears before Logged; try alternative search
-      if (!u) {
-        const altU = r.match(/(?:Emp\s*:[^ ]+\s+)?([A-Za-z0-9._\-@]+)\s+[A-Za-z0-9]{4,8}\s+Obj\s*:/i);
-        if (altU) user = altU[1].trim();
-      }
+    } else {
+      // se não há remark, tenta extrair usuário por heurística no bloco (ex: "Logged :NOME" disperso)
+      const u2 = block.match(/Logged\s*:\s*([A-Za-z0-9._\-@]+)/i);
+      if (u2) user = u2[1].trim();
     }
 
     results.push({
       rawBlock: block,
-      errorText,
-      remarkText,
+      errorText: errorText || '',
+      remarkText: remarkText || '',
       parsed: { user, fonte, routine, routineDesc }
     });
   }
 
   return results;
-}*/
-
-function extractAllThreadErrorBlocks(content) {
-  // captura blocos que contenham THREAD ERROR (mesmo com comentários antes)
-  const regex = /(?:\/\*[-=]+[\s\S]*?)?(THREAD ERROR[\s\S]*?)(?=(?:\/\*[-=]+|THREAD ERROR|\Z))/gi;
-  const blocks = [...content.matchAll(regex)].map(m => m[1]);
-  const results = [];
-
-  for (const block of blocks) {
-    // linhas brutas e linhas "trimadas" para navegação
-    const rawLines = block.split(/\r?\n/);
-    const lines = rawLines.map(l => l.replace(/\r/g, '').trim());
-
-    // 1) header: extrai data/hora do THREAD ERROR (se existir)
-    const headerLine = lines.find(l => /^THREAD ERROR/i.test(l)) || '';
-    const headerDateMatch = headerLine.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/);
-    const logDateTime = headerDateMatch ? `${headerDateMatch[1]} ${headerDateMatch[2]}` : '';
-
-    // 2) encontra a primeira linha "significativa" após o header (primeira que não inicia com '[' ou '*')
-    let errorText = '';
-    let headerIndex = lines.findIndex(l => /^THREAD ERROR/i.test(l));
-    if (headerIndex < 0) headerIndex = -1;
-    for (let i = headerIndex + 1; i < lines.length; i++) {
-      const ln = rawLines[i] !== undefined ? rawLines[i].replace(/\r/g, '') : lines[i];
-      const trimmed = (ln || '').trim();
-      if (!trimmed) continue;
-      if (/^\[/.test(trimmed)) continue; // tags
-      if (/^\*/.test(trimmed)) continue; // * SVN Revision
-      // usa a linha original (não a .trim) para preservar espaços e conteúdo completo
-      errorText = rawLines[i] !== undefined ? rawLines[i].replace(/\r/g, '') : trimmed;
-      errorText = errorText.replace(/\r?\n/g, ''); // garantir single-line
-      break;
-    }
-    if (!errorText) {
-      // fallback: pega a primeira linha não-vazia do bloco (raw)
-      const firstNonEmpty = rawLines.find(r => (r || '').trim());
-      errorText = firstNonEmpty ? firstNonEmpty.replace(/\r/g, '') : '';
-    }
-
-    // 3) Extrai a data da própria errorText (às vezes tem data na mesma linha)
-    //    e mantém essa data como fonte preferencial para delimitar o trecho do 'on'
-    const dateInErrorTextMatch = errorText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/);
-    const dateForOn = dateInErrorTextMatch ? `${dateInErrorTextMatch[1]} ${dateInErrorTextMatch[2]}` : null;
-
-    // 4) Captura o trecho entre o último " on " antes da data e a data (se data existir)
-    let fonte = '';
-    if (dateForOn) {
-      // pega substring até o índice da data
-      const idx = errorText.indexOf(dateInErrorTextMatch[0]);
-      if (idx > -1) {
-        const beforeDate = errorText.slice(0, idx);
-        // procura o último " on " (com espaço) nesse trecho
-        const lastOn = beforeDate.toLowerCase().lastIndexOf(' on ');
-        if (lastOn > -1) {
-          fonte = beforeDate.slice(lastOn + 4).trim(); // remove ' on '
-        }
-      }
-    }
-
-    // 5) se não encontrou fonte acima, faz fallback buscando "on <algo>" até eol, ou pega (X.Y)
-    if (!fonte) {
-      // tenta pegar último " on " em toda a linha
-      const lastOnAll = errorText.toLowerCase().lastIndexOf(' on ');
-      if (lastOnAll > -1) {
-        fonte = errorText.slice(lastOnAll + 4).trim();
-      } else {
-        // fallback final: pega primeiro (NOME.EXT) do bloco
-        const allFontes = [...block.matchAll(/\(([A-Z0-9_]+)\.(PRW|PRX|TLPP)\)/gi)];
-        if (allFontes.length > 0) {
-          fonte = `${allFontes[0][1].trim()}.${allFontes[0][2].toUpperCase()}`;
-        }
-      }
-    }
-
-    // 6) Se fonte terminou contendo a data (caso sem separador), limpa a data do final
-    if (fonte) {
-      const cut = fonte.match(/^(.*?)(\s+\d{2}\/\d{2}\/\d{4}.*)$/);
-      if (cut) fonte = cut[1].trim();
-    }
-
-    // 7) remark extraction (procura [remark: ...] em todo o bloco)
-    const remarkMatch = block.match(/\[remark:([\s\S]*?)\]/i);
-    const remarkText = remarkMatch ? remarkMatch[1].replace(/\s+/g, ' ').trim() : '';
-
-    // 8) extrai user, rotina e descricao do remark (tolerante a U_ e acentuação)
-    let user = 'Desconhecido';
-    let routine = 'N/A';
-    let routineDesc = '';
-    if (remarkText) {
-      const u = remarkText.match(/Logged\s*:\s*([A-Z0-9._\-@]+)/i) || remarkText.match(/Logged\s*:\s*([^\s]+)/i);
-      if (u) user = u[1].trim();
-
-      const o = remarkText.match(/Obj\s*:\s*([U_]*[A-Z0-9_]+)\s*(?:-\s*(.+))?/i);
-      if (o) {
-        routine = (o[1] || 'N/A').trim();
-        routineDesc = (o[2] || '').trim();
-      }
-    }
-
-    // 9) captura número da linha, se houver, diretamente na errorText
-    let lineNumber = null;
-    const lnMatch = errorText.match(/line\s*:\s*(\d+)/i);
-    if (lnMatch) lineNumber = parseInt(lnMatch[1], 10);
-
-    // 10) garante que errorText fique com a linha inteira (sem corte)
-    errorText = (errorText || '').trim();
-
-    // 11) devolve resultado
-    results.push({
-      logDateTime: logDateTime || '',   // data/hora do header THREAD ERROR
-      errorText,
-      remarkText,
-      parsed: {
-        user,
-        fonte,
-        routine,
-        routineDesc
-      },
-      rawBlock: block
-    });
-  }
-
-  return results;
 }
+
 
 
 /**
@@ -681,7 +625,7 @@ function monitorLogForErrors(agentName, serviceName, logPath) {
           routine: b.parsed.routine,
           routineDesc: b.parsed.routineDesc,
           errorText: b.errorText,
-          line: b.rawBlock
+          //line: b.rawBlock
         };
         // compute hash inside appendErrorLog
         appendErrorLog(obj);
@@ -720,7 +664,7 @@ function monitorLogForErrors(agentName, serviceName, logPath) {
               routine: b.parsed.routine,
               routineDesc: b.parsed.routineDesc,
               errorText: b.errorText,
-              line: b.rawBlock
+              //line: b.rawBlock
             };
             appendErrorLog(obj);
           }
