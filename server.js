@@ -440,12 +440,8 @@ if (!fs.existsSync(ERRORS_FILE)) fs.writeFileSync(ERRORS_FILE, '[]', 'utf8');
 function appendErrorLog(data) {
   try {
     // extrai data/hora real da linha THREAD ERROR, se existir
-    let logDate = '';
-    const match = data.errorText?.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/);
-    if (match) {
-      logDate = `${match[1]} ${match[2]}`;
-    }
-
+    let logDate = data.dateError;
+    
     // gera hash único usando também data/hora do log
     if (!data._hash) {
       const hashBase = JSON.stringify({
@@ -510,6 +506,14 @@ function extractAllThreadErrorBlocks(content) {
   const results = [];
 
   for (const block of blocks) {
+
+    // Extrai a data da primeira linha do bloco (THREAD ERROR)
+    let errorDate = '';
+    const threadHeaderMatch = block.match(/^THREAD ERROR.*?(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/im);
+    if (threadHeaderMatch) {
+      errorDate = `${threadHeaderMatch[1]} ${threadHeaderMatch[2]}`;
+    }
+
     // normaliza e separa em linhas úteis
     const rawLines = block.split(/\r?\n/).map(l => l.replace(/\r/g, ''));
 
@@ -579,7 +583,8 @@ function extractAllThreadErrorBlocks(content) {
       rawBlock: block,
       errorText: errorText || '',
       remarkText: remarkText || '',
-      parsed: { user, fonte, routine, routineDesc }
+      parsed: { user, fonte, routine, routineDesc },
+    errorDate
     });
   }
 
@@ -625,7 +630,7 @@ function monitorLogForErrors(agentName, serviceName, logPath) {
           routine: b.parsed.routine,
           routineDesc: b.parsed.routineDesc,
           errorText: b.errorText,
-          //line: b.rawBlock
+          dateError: b.errorDate
         };
         // compute hash inside appendErrorLog
         appendErrorLog(obj);
@@ -664,7 +669,7 @@ function monitorLogForErrors(agentName, serviceName, logPath) {
               routine: b.parsed.routine,
               routineDesc: b.parsed.routineDesc,
               errorText: b.errorText,
-              //line: b.rawBlock
+              dateError: b.errorDate
             };
             appendErrorLog(obj);
           }
@@ -731,7 +736,7 @@ app.get('/api/errors', async (req, res) => {
     const data = JSON.parse(raw || '[]');
 
     // opcional: ordenar por data mais recente
-    data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    data.sort((a, b) => new Date(b.errorDate) - new Date(a.errorDate));
 
     console.log(`[API] ${req.ip} consultou /api/errors (${data.length} erros)`);
     res.json(data);

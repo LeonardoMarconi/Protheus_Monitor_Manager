@@ -734,8 +734,8 @@ function applyErrorFilter() {
     const card = document.createElement('div');
     card.className = 'card error-card shadow-sm';
 
-    const dataLocal = err.logDateTime || err.timestamp || err.errorDate || '';
-    const displayDate = dataLocal ? (new Date(err.timestamp).toLocaleString('pt-BR')) : 'Sem data';
+    const dataLocal = err.errorDate || '';
+    const displayDate = dataLocal;
 
     const isCustom = err.errorText?.includes?.('U_');
     //const isCustom = err.errorText?.startsWith?.('U_');
