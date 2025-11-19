@@ -26,6 +26,26 @@ const filePositions = new Map(); // chave: path -> last read byte offset
 const seenBlockHashes = new Set(); // evita duplicatas em memória
 const activeWatchers = new Map(); // chave: agent|service|path -> watcher
 
+const Database = require("better-sqlite3");
+const db = new Database(path.join(__dirname, "errors.db"));
+
+// Criar tabela se não existir
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT,
+    agent TEXT,
+    service TEXT,
+    user TEXT,
+    fonte TEXT,
+    routine TEXT,
+    routineDesc TEXT,
+    errorText TEXT,
+    errorDate TEXT,
+    hash TEXT UNIQUE
+  )
+`).run();
+
 // --- Utils ---
 
 /** Carrega os caminhos de log persistidos. */
@@ -461,12 +481,15 @@ function appendErrorLog(data) {
     // adiciona data/hora real ao objeto, se achada
     if (logDate && !data.errorDate) data.errorDate = logDate;
 
-    const errors = JSON.parse(fs.readFileSync(ERRORS_FILE, 'utf8'));
-    errors.push(data);
-    fs.writeFileSync(ERRORS_FILE, JSON.stringify(errors, null, 2));
+    // Inserção no SQLite (com prevenção de duplicidade)
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO errors
+      (timestamp, agent, service, user, fonte, routine, routineDesc, errorText, errorDate, hash)
+      VALUES (@timestamp, @agent, @service, @user, @fonte, @routine, @routineDesc, @errorText, @errorDate, @hash)
+    `);
 
+    stmt.run(data);
     seenBlockHashes.add(data._hash);
-    console.log(`[LOG] Erro salvo: ${data.service} | ${data.user} | ${data.routine} | ${logDate}`);
     return true;
   } catch (err) {
     console.error('[ERRO] Falha ao salvar erro:', err.message);
@@ -727,23 +750,12 @@ function initAutomaticLogMonitoring() {
 const errorsPath = path.join(__dirname, 'errors.json');
 
 app.get('/api/errors', async (req, res) => {
-  try {
-    if (!fs.existsSync(errorsPath)) {
-      return res.status(200).json([]);
-    }
-
-    const raw = await fs.promises.readFile(errorsPath, 'utf-8');
-    const data = JSON.parse(raw || '[]');
-
-    // opcional: ordenar por data mais recente
-    data.sort((a, b) => new Date(b.errorDate) - new Date(a.errorDate));
-
-    console.log(`[API] ${req.ip} consultou /api/errors (${data.length} erros)`);
-    res.json(data);
-  } catch (err) {
-    console.error('[API] Erro ao ler errors.json:', err.message);
-    res.status(500).json({ error: 'Falha ao ler arquivo de erros.' });
-  }
+ try {
+   const rows = db.prepare('SELECT * FROM errors ORDER BY id DESC LIMIT 500').all();
+   res.json(rows);
+ } catch (err) {
+   res.status(500).json({ error: err.message });
+ }
 });
 // ==========================================================
 // GET /api/counts → Retorna quantidades de Servers, WebApps e Errors
