@@ -24,7 +24,8 @@ Este projeto consiste em um sistema de monitoramento para ambientes TOTVS Prothe
 * 📜 **Visualizador de Log:** Modal com streaming de log via WebSocket, filtro por tags (`[ERROR]`, `[WARN]`, `[INFO]`) e limite de linhas.
 * ⚙️ **Visualizador de INI:** Exibe o conteúdo do arquivo de configuração (`.ini`) do serviço.
 * 🚦 **Status de WebApps:** Painel dedicado para monitorar a saúde das URLs configuradas (ex: SmartClient Web, REST API).
-
+* ⚠️ **Monitor de Erros:** Painel dedicado para monitorar os Thread Errors, limpos e catalogados, listados por padrão (com botão de busca do erro no Google) ou customizado (Irei automatizar o envio por email ao servicedesk).
+* 🚪 **Monitor de Portas TCP:** Pagina com um datagrid dedicado a mostrar, porta TCP, PID, Processo dos serviços do Protheus.
 ---
 
 ## 🛠️ Como Instalar e Usar
@@ -42,25 +43,7 @@ O Agente deve ser instalado no servidor Windows onde os serviços Protheus estã
 #### Instalação
 1.  Crie uma pasta (ex: `protheus-agent`) no seu servidor.
 2.  Coloque os arquivos `server.js`, `inis.json`, `logs.json` (vazios ou os arquivos iniciais) e `webapps.json` na pasta.
-3.  Coloque o arquivo `package.json` na mesma pasta, para gerenciar as dependências:
-    ```json
-    {
-      "name": "protheus-monitor-agent",
-      "version": "1.0.0",
-      "description": "Protheus service and log monitor agent.",
-      "main": "server.js",
-      "scripts": {
-        "start": "node server.js"
-      },
-      "dependencies": {
-        "express": "^4.19.2",
-        "cors": "^2.8.5",
-        "ws": "^8.18.0",
-        "chokidar": "^3.6.0",
-        "axios": "^1.7.2"
-      }
-    }
-    ```
+3.  Coloque o arquivo `package.json` na mesma pasta, para gerenciar as dependências.
 4.  Abra o terminal nesta pasta e instale as dependências:
     ```bash
     npm install
@@ -101,6 +84,8 @@ O Agente deve ser instalado no servidor Windows onde os serviços Protheus estã
     * **Ver Log:** Ao clicar pela primeira vez, será solicitado o caminho do log (`C:\Protheus\bin\appserver\appserver.log`). Esse caminho será salvo no Agente.
     * **Ver INI:** Ao clicar pela primeira vez, será solicitado o caminho do INI (`C:\Protheus\bin\appserver\appserver.ini`). Esse caminho será salvo no Agente.
 5.  Na seção **WebApps**, use **+ Adicionar** para configurar URLs de monitoramento.
+6.  Na seção **Errors**, use os campos de busca e de data para filtrar os thread errors catalogados. Há um listener no agente que fica lendo os arquivos de console.log cadastrados no **Ver Log** e persiste de forma limpa e concisa os dados para que o analista possa verificar o que aconteceu.
+7.  Na Seção **Portas TCP**, há uma datatable em jquery que demostra a porta TCP, PID, Processo dos serviços do Protheus.
 
 ---
 
